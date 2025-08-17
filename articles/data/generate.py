@@ -1,104 +1,100 @@
 # articles/data/generate.py
-# -----------------------------------------------------------------------------
-# Génère un article HTML simple à partir de topics.csv et config.json.
-# Emplacement des fichiers attendu :
-#   - ce script : articles/data/generate.py
-#   - config.json et topics.csv : à la RACINE du dépôt
-#   - sortie : articles/<slug>.html
-# -----------------------------------------------------------------------------
+import json, os, datetime, csv, html
 
-from pathlib import Path
-import csv
-import json
-import re
-from datetime import datetime
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
+CONFIG_PATH = os.path.join(ROOT, "config.json")
+TOPICS_PATH = os.path.join(ROOT, "topics.csv")
 
-# 1) Localisation des chemins (ne rien changer ici)
-#    Ce fichier est dans: articles/data/generate.py  -> racine = parents[2]
-ROOT = Path(__file__).resolve().parents[2]
-ARTICLES_DIR = ROOT / "articles"
-ARTICLES_DIR.mkdir(parents=True, exist_ok=True)
-
-CONFIG_PATH = ROOT / "config.json"
-TOPICS_PATH = ROOT / "topics.csv"
-
-# 2) Utilitaires
-def slugify(text: str) -> str:
-    text = text.strip().lower()
-    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
-    text = re.sub(r"[\s_-]+", "-", text)
-    return text.strip("-")
-
-def now_utc_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-
-# 3) Charger config + topics
 def load_config():
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"config.json introuvable: {CONFIG_PATH}")
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def load_topics():
-    if not TOPICS_PATH.exists():
+    topics = []
+    if not os.path.exists(TOPICS_PATH):
         raise FileNotFoundError(f"topics.csv introuvable: {TOPICS_PATH}")
-    rows = list(csv.DictReader(TOPICS_PATH.open(encoding="utf-8")))
-    if not rows:
+    with open(TOPICS_PATH, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            line = (row[0] or "").strip() if row else ""
+            if line:
+                topics.append(line)
+    if not topics:
         raise ValueError("topics.csv est vide.")
-    return rows
+    return topics
 
-# 4) Générer un HTML très simple (squelette)
+def slugify(title: str) -> str:
+    s = "".join(c.lower() if c.isalnum() else "-" for c in title)
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s.strip("-")
+
 def render_html(title: str, intro: str) -> str:
-    ts = now_utc_iso()
-    return f"""<!DOCTYPE html>
+    ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    return f"""<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title} • True Buyers Guide</title>
-  <style>
-    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height: 1.6; padding: 2rem; max-width: 820px; margin: auto; }}
-    h1 {{ font-size: 2rem; margin-bottom: .25rem; }}
-    .meta {{ color: #555; margin-bottom: 1.5rem; }}
-    a {{ color: #0a58ca; text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    .back {{ margin-top: 2rem; display: inline-block; }}
-    .note {{ background:#f6f8fa; border:1px solid #e5e7eb; padding:.75rem 1rem; border-radius:.5rem; }}
-  </style>
+  <meta charset="utf-8">
+  <title>{html.escape(title)}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>body{{font:16px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;}}h1{{font-size:32px;margin:0 0 8px}}.note{{background:#f4f6f8;border:1px solid #e5e7eb;padding:12px 14px;border-radius:8px;margin:12px 0}}</style>
 </head>
 <body>
-  <h1>{title}</h1>
-  <div class="meta">Generated {ts}</div>
-
-  <p class="note">{intro}</p>
-
-  <h2>What you'll find here</h2>
-  <ul>
-    <li>Clear, honest guidance for shoppers</li>
-    <li>Editor-picked products with quick pros & cons</li>
-    <li>Simple, scannable sections (no fluff)</li>
-  </ul>
-
-  <p class="back"><a href="./index.html">← Back to Home</a></p>
+  <h1>{html.escape(title)}</h1>
+  <p class="note">Generated {ts}</p>
+  <p>{html.escape(intro)}</p>
+  <hr>
+  <p><a href="../index.html">← Back to Home</a></p>
 </body>
 </html>
 """
+
+def ensure_li_link(index_path: str, href: str, text: str):
+    """Ajoute <li><a …>…</a></li> dans index.html si le lien n'y est pas déjà."""
+    if not os.path.exists(index_path):
+        raise FileNotFoundError(f"index.html introuvable: {index_path}")
+
+    with open(index_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    li_line = f'<li><a href="{href}">{html.escape(text)}</a></li>'
+    if li_line in content:
+        return  # déjà présent, on ne duplique pas
+
+    # On insère juste avant la fermeture de la liste </ul> si trouvée, sinon avant </body>
+    if "</ul>" in content:
+        content = content.replace("</ul>", f"  {li_line}\n</ul>")
+    else:
+        content = content.replace("</body>", f"{li_line}\n</body>")
+
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(content)
 
 def main():
     cfg = load_config()
     topics = load_topics()
 
-    # On prend la première ligne comme sujet du jour (simple et déterministe)
+    # On prend le 1er sujet comme démo (tu peux choisir autrement si tu veux)
     topic = topics[0]
-    title = topic.get("title") or topic.get("Topic") or "New Buyer’s Guide"
-    intro = topic.get("intro") or topic.get("Intro") or "Starter draft generated automatically."
+    title = cfg.get("site_title_prefix", "New Buyer’s Guide").strip() or "New Buyer’s Guide"
+    intro = cfg.get("intro", "Starter draft generated automatically.")
 
-    slug = topic.get("slug") or slugify(title)
-    # file name simple : <slug>.html
-    outfile = ARTICLES_DIR / f"{slug}.html"
+    # Chemins
+    out_dir = os.path.join(ROOT, "articles")
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"{slugify('new-buyers-guide')}.html"
+    out_file = os.path.join(out_dir, filename)
 
-    html = render_html(title, intro)
-    outfile.write_text(html, encoding="utf-8")
-    print(f"Written: {outfile}")
+    # Écrit la page
+    html_text = render_html(title, intro)
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.write(html_text)
+    print(f"Wrote: {out_file}")
+
+    # Ajoute le lien dans la home automatiquement
+    index_path = os.path.join(ROOT, "index.html")
+    ensure_li_link(index_path, href=f"articles/{filename}", text="New Buyers Guide")
+    print("Home updated with link.")
 
 if __name__ == "__main__":
     main()
