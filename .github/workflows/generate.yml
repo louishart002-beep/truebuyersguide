@@ -1,0 +1,40 @@
+name: Generate content
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * *" # tous les jours à 06:00 UTC (modifiable plus tard)
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify OPENAI_API_KEY is present
+        run: |
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "Missing OPENAI_API_KEY secret."
+            exit 1
+          else
+            echo "OPENAI_API_KEY is set."
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run generator
+        run: python articles/data/generate.py
+
+      - name: Commit & push generated content
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git add articles/
+          git commit -m "chore: auto-generate stub article [skip ci]" || echo "No changes to commit"
+          git push
